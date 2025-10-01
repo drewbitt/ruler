@@ -1,5 +1,7 @@
-import { promises as fs } from 'fs';
-import * as path from 'path';
+// Use require with any typing to avoid dependency on Node type definitions in this file
+declare const require: any;
+const path = require('path') as any;
+const fs = (require('fs') as any).promises as any;
 import { parse as parseTOML } from '@iarna/toml';
 import { sha256, stableJson } from './hash';
 import { concatenateRules } from './RuleProcessor';
@@ -49,8 +51,8 @@ export async function loadUnifiedConfig(
     const text = await fs.readFile(tomlFile, 'utf8');
     tomlRaw = text.trim() ? parseTOML(text) : {};
     meta.configFile = tomlFile;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+  } catch (err: unknown) {
+    if ((err as any).code !== 'ENOENT') {
       diagnostics.push({
         severity: 'warning',
         code: 'TOML_READ_ERROR',
@@ -95,11 +97,11 @@ export async function loadUnifiedConfig(
   try {
     const dirEntries = await fs.readdir(meta.rulerDir, { withFileTypes: true });
     const mdFiles = dirEntries
-      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
-      .map((e) => path.join(meta.rulerDir, e.name));
+      .filter((e: any) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
+      .map((e: any) => path.join(meta.rulerDir, e.name));
     // Sort lexicographically then ensure AGENTS.md first
-    mdFiles.sort((a, b) => a.localeCompare(b));
-    mdFiles.sort((a, b) => {
+    mdFiles.sort((a: string, b: string) => a.localeCompare(b));
+    mdFiles.sort((a: string, b: string) => {
       const aIs = /agents\.md$/i.test(a);
       const bIs = /agents\.md$/i.test(b);
       if (aIs && !bIs) return -1;
@@ -108,7 +110,7 @@ export async function loadUnifiedConfig(
     });
     let order = 0;
     ruleFiles = await Promise.all(
-      mdFiles.map(async (file) => {
+      mdFiles.map(async (file: string) => {
         const content = await fs.readFile(file, 'utf8');
         const stat = await fs.stat(file);
         return {
@@ -123,7 +125,7 @@ export async function loadUnifiedConfig(
         } as RuleFile;
       }),
     );
-  } catch (err) {
+  } catch (err: unknown) {
     diagnostics.push({
       severity: 'warning',
       code: 'RULES_READ_ERROR',
@@ -266,25 +268,22 @@ export async function loadUnifiedConfig(
     });
   }
 
-  try {
-    if (mcpJsonExists) {
-      const raw = await fs.readFile(mcpFile, 'utf8');
+  // Helper to parse a single mcp.json file leniently and return servers
+  async function parseMcpJsonFile(filePath: string): Promise<Record<string, McpServerDef>> {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch (e) {
-        // Lenient fallback: strip comments and trailing commas then retry
+      } catch (e: unknown) {
         const stripped = raw
-          // strip /* */ comments
           .replace(/\/\*[\s\S]*?\*\//g, '')
-          // strip // comments
           .replace(/(^|\s+)\/\/.*$/gm, '$1')
-          // remove trailing commas before } or ]
           .replace(/,\s*([}\]])/g, '$1');
         try {
           parsed = JSON.parse(stripped) as Record<string, unknown>;
         } catch {
-          throw e; // rethrow original error for diagnostics
+          throw e as Error;
         }
       }
 
@@ -293,6 +292,7 @@ export async function loadUnifiedConfig(
         (parsedObj.mcpServers as unknown) ||
         (parsedObj.servers as unknown) ||
         {};
+      const servers: Record<string, McpServerDef> = {};
       if (serversRaw && typeof serversRaw === 'object') {
         for (const [name, def] of Object.entries(
           serversRaw as Record<string, Record<string, unknown>>,
@@ -315,24 +315,68 @@ export async function loadUnifiedConfig(
               ),
             ) as Record<string, string>;
           }
-          // Derive type
           if (server.url) server.type = 'remote';
           else if (server.command) server.type = 'stdio';
-          jsonMcpServers[name] = server;
+          servers[name] = server;
         }
       }
-    }
-  } catch (err) {
-    if (mcpJsonExists) {
+      return servers;
+    } catch (err) {
       diagnostics.push({
         severity: 'warning',
         code: 'MCP_READ_ERROR',
         message: 'Failed to read mcp.json',
-        file: mcpFile,
+        file: filePath,
         detail: (err as Error).message,
       });
+      return {};
     }
   }
+
+  // New: collect and merge all mcp.json files under .ruler/**, with child overriding parent
+  const discoveredJsonServers: Record<string, McpServerDef> = {};
+  try {
+    // Depth-first walk to ensure parents merge first, then children override
+    async function walk(dir: string) {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      // Process files in this directory first
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === 'mcp.json') {
+          const filePath = path.join(dir, entry.name);
+          const servers = await parseMcpJsonFile(filePath);
+          for (const [name, server] of Object.entries(servers)) {
+            if (Object.prototype.hasOwnProperty.call(discoveredJsonServers, name)) {
+              diagnostics.push({
+                severity: 'warning',
+                code: 'MCP_JSON_OVERRIDE',
+                message: `MCP server '${name}' from ${filePath} overrides earlier definition`,
+                file: filePath,
+              });
+            }
+            discoveredJsonServers[name] = server;
+          }
+        }
+      }
+      // Then recurse into subdirectories
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          await walk(path.join(dir, entry.name));
+        }
+      }
+    }
+
+    await walk(meta.rulerDir);
+  } catch {
+    // ignore directory read errors
+  }
+
+  // Preserve legacy top-level flag/diagnostic behavior
+  if (mcpJsonExists) {
+    meta.mcpFile = mcpFile;
+  }
+
+  // Merge servers: start with discovered JSON (including subdirs), overlay TOML (TOML wins per server name)
+  Object.assign(jsonMcpServers, discoveredJsonServers);
 
   // Merge servers: start with JSON, overlay TOML (TOML wins per server name)
   const mergedServers = { ...jsonMcpServers, ...tomlMcpServers };
