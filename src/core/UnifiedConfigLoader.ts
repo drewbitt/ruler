@@ -268,115 +268,34 @@ export async function loadUnifiedConfig(
     });
   }
 
-  // Helper to parse a single mcp.json file leniently and return servers
-  async function parseMcpJsonFile(filePath: string): Promise<Record<string, McpServerDef>> {
+  // Collect all mcp.json files recursively
+  async function collectMcpFiles(dir: string): Promise<Record<string, McpServerDef>> {
+    const servers: Record<string, McpServerDef> = {};
     try {
-      const raw = await fs.readFile(filePath, 'utf8');
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch (e: unknown) {
-        const stripped = raw
-          .replace(/\/\*[\s\S]*?\*\//g, '')
-          .replace(/(^|\s+)\/\/.*$/gm, '$1')
-          .replace(/,\s*([}\]])/g, '$1');
-        try {
-          parsed = JSON.parse(stripped) as Record<string, unknown>;
-        } catch {
-          throw e as Error;
-        }
-      }
-
-      const parsedObj = parsed as Record<string, unknown>;
-      const serversRaw =
-        (parsedObj.mcpServers as unknown) ||
-        (parsedObj.servers as unknown) ||
-        {};
-      const servers: Record<string, McpServerDef> = {};
-      if (serversRaw && typeof serversRaw === 'object') {
-        for (const [name, def] of Object.entries(
-          serversRaw as Record<string, Record<string, unknown>>,
-        )) {
-          if (!def || typeof def !== 'object') continue;
-          const server: McpServerDef = {};
-          if (typeof def.command === 'string') server.command = def.command;
-          if (Array.isArray(def.command)) server.command = def.command[0];
-          if (Array.isArray(def.args)) server.args = def.args.map(String);
-          if (def.env && typeof def.env === 'object') {
-            server.env = Object.fromEntries(
-              Object.entries(def.env).filter(([, v]) => typeof v === 'string'),
-            ) as Record<string, string>;
-          }
-          if (typeof def.url === 'string') server.url = def.url;
-          if (def.headers && typeof def.headers === 'object') {
-            server.headers = Object.fromEntries(
-              Object.entries(def.headers).filter(
-                ([, v]) => typeof v === 'string',
-              ),
-            ) as Record<string, string>;
-          }
-          if (server.url) server.type = 'remote';
-          else if (server.command) server.type = 'stdio';
-          servers[name] = server;
-        }
-      }
-      return servers;
-    } catch (err) {
-      diagnostics.push({
-        severity: 'warning',
-        code: 'MCP_READ_ERROR',
-        message: 'Failed to read mcp.json',
-        file: filePath,
-        detail: (err as Error).message,
-      });
-      return {};
-    }
-  }
-
-  // New: collect and merge all mcp.json files under .ruler/**, with child overriding parent
-  const discoveredJsonServers: Record<string, McpServerDef> = {};
-  try {
-    // Depth-first walk to ensure parents merge first, then children override
-    async function walk(dir: string) {
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      // Process files in this directory first
       for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
         if (entry.isFile() && entry.name === 'mcp.json') {
-          const filePath = path.join(dir, entry.name);
-          const servers = await parseMcpJsonFile(filePath);
-          for (const [name, server] of Object.entries(servers)) {
-            if (Object.prototype.hasOwnProperty.call(discoveredJsonServers, name)) {
-              diagnostics.push({
-                severity: 'warning',
-                code: 'MCP_JSON_OVERRIDE',
-                message: `MCP server '${name}' from ${filePath} overrides earlier definition`,
-                file: filePath,
-              });
-            }
-            discoveredJsonServers[name] = server;
+          try {
+            const raw = await fs.readFile(fullPath, 'utf8');
+            const parsed = JSON.parse(raw) as any;
+            const mcpServers = parsed.mcpServers || parsed.servers || {};
+            Object.assign(servers, mcpServers);
+          } catch {
+            // ignore parse errors
           }
+        } else if (entry.isDirectory()) {
+          Object.assign(servers, await collectMcpFiles(fullPath));
         }
       }
-      // Then recurse into subdirectories
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          await walk(path.join(dir, entry.name));
-        }
-      }
+    } catch {
+      // ignore read errors
     }
-
-    await walk(meta.rulerDir);
-  } catch {
-    // ignore directory read errors
+    return servers;
   }
 
-  // Preserve legacy top-level flag/diagnostic behavior
-  if (mcpJsonExists) {
-    meta.mcpFile = mcpFile;
-  }
-
-  // Merge servers: start with discovered JSON (including subdirs), overlay TOML (TOML wins per server name)
-  Object.assign(jsonMcpServers, discoveredJsonServers);
+  // Merge discovered JSON servers
+  Object.assign(jsonMcpServers, await collectMcpFiles(meta.rulerDir));
 
   // Merge servers: start with JSON, overlay TOML (TOML wins per server name)
   const mergedServers = { ...jsonMcpServers, ...tomlMcpServers };
