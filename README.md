@@ -511,6 +511,19 @@ When both TOML and JSON configurations are present:
 2. **Servers are merged** from both sources (unless using overwrite strategy)
 3. **Deprecation warning** is shown encouraging migration to TOML (warning shown once per run)
 
+### Local MCP JSON Files
+
+For developer-specific servers that shouldn't be committed, place them in subdirectories under `.ruler/`:
+
+```
+.ruler/
+├── ruler.toml          # Shared servers (committed)
+└── local/
+    └── mcp.json       # Personal servers (gitignored)
+```
+
+Add `.ruler/local/` to your `.gitignore` to keep personal configurations private. Ruler automatically discovers and merges all `mcp.json` files under `.ruler/`, with deeper files overriding shallower ones.
+
 ### Server Types
 
 **Local/stdio servers** require a `command` field:
