@@ -513,15 +513,14 @@ When both TOML and JSON configurations are present:
 
 ### Recursive MCP JSON Discovery
 
-Ruler automatically discovers and merges all `mcp.json` files found anywhere under the `.ruler/` directory tree. Files in deeper subdirectories override those in parent directories when server names conflict.
+While TOML configuration is recommended, Ruler also supports legacy `mcp.json` files anywhere under the `.ruler/` directory tree. Files in deeper subdirectories override those in parent directories when server names conflict.
 
 ```
 .ruler/
-├── mcp.json           # Base servers
-├── subdir/
-│   └── mcp.json       # Overrides base servers
-└── nested/
-    └── mcp.json       # Overrides both above
+├── ruler.toml         # Primary configuration (recommended)
+├── mcp.json           # Legacy JSON (deprecated)
+└── subdir/
+    └── mcp.json       # Additional JSON servers
 ```
 
 ### Server Types
