@@ -1,7 +1,7 @@
-// Use require with any typing to avoid dependency on Node type definitions in this file
-declare const require: any;
-const path = require('path') as any;
-const fs = (require('fs') as any).promises as any;
+// @ts-ignore - keep file-local minimalism without project-wide Node types
+import { promises as fs } from 'fs';
+// @ts-ignore - keep file-local minimalism without project-wide Node types
+import * as path from 'path';
 import { parse as parseTOML } from '@iarna/toml';
 import { sha256, stableJson } from './hash';
 import { concatenateRules } from './RuleProcessor';
@@ -51,8 +51,8 @@ export async function loadUnifiedConfig(
     const text = await fs.readFile(tomlFile, 'utf8');
     tomlRaw = text.trim() ? parseTOML(text) : {};
     meta.configFile = tomlFile;
-  } catch (err: unknown) {
-    if ((err as any).code !== 'ENOENT') {
+  } catch (err) {
+    if ((err as any)?.code !== 'ENOENT') {
       diagnostics.push({
         severity: 'warning',
         code: 'TOML_READ_ERROR',
@@ -97,8 +97,8 @@ export async function loadUnifiedConfig(
   try {
     const dirEntries = await fs.readdir(meta.rulerDir, { withFileTypes: true });
     const mdFiles = dirEntries
-      .filter((e: any) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
-      .map((e: any) => path.join(meta.rulerDir, e.name));
+      .filter((e: { isFile: () => boolean; name: string }) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
+      .map((e: { name: string }) => path.join(meta.rulerDir, e.name));
     // Sort lexicographically then ensure AGENTS.md first
     mdFiles.sort((a: string, b: string) => a.localeCompare(b));
     mdFiles.sort((a: string, b: string) => {
@@ -125,7 +125,7 @@ export async function loadUnifiedConfig(
         } as RuleFile;
       }),
     );
-  } catch (err: unknown) {
+  } catch (err) {
     diagnostics.push({
       severity: 'warning',
       code: 'RULES_READ_ERROR',
