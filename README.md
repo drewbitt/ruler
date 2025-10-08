@@ -511,6 +511,18 @@ When both TOML and JSON configurations are present:
 2. **Servers are merged** from both sources (unless using overwrite strategy)
 3. **Deprecation warning** is shown encouraging migration to TOML (warning shown once per run)
 
+### Recursive MCP JSON Discovery
+
+While TOML configuration is recommended, Ruler also supports legacy `mcp.json` files anywhere under the `.ruler/` directory tree. Files in deeper subdirectories override those in parent directories when server names conflict.
+
+```
+.ruler/
+├── ruler.toml         # Primary configuration (recommended)
+├── mcp.json           # Legacy JSON (deprecated)
+└── subdir/
+    └── mcp.json       # Additional JSON servers
+```
+
 ### Server Types
 
 **Local/stdio servers** require a `command` field:
